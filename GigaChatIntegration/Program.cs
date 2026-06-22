@@ -10,7 +10,7 @@ namespace GigaChatIntegration
         static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
         static void Main(string[] args)
         {
-            var authKey = "MDE5ZWYwMjQtZjhkNi03ZmI5LTlkNDktYWQ4MmJiODQ5OTRhOjFiMGE0OWUyLWIyNWEtNGE0Zi1iNTViLWJlNWI0ZmE0NDk2MQ==";
+            var authKey = "989898==";
 
             var accessToken = GetAccessToken(authKey);
 
