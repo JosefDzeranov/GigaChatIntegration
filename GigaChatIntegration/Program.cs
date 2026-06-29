@@ -115,7 +115,7 @@ namespace GigaChatIntegration
                     // functions_state_id — GigaChat ждёт его обратно) и выполняем функцию.
                     history.Add(reply with { Content = reply.Content ?? "" });
 
-                    string result = ExecuteFunction(reply.FunctionCall);
+                    string result = ExecuteFunction(reply.FunctionCall, accessToken);
 
                     history.Add(new ChatMessage("function", result, Name: reply.FunctionCall.Name));
 
@@ -152,7 +152,7 @@ namespace GigaChatIntegration
         //  ВЫПОЛНЕНИЕ ФУНКЦИЙ, которые захотела вызвать модель.
         //  Возвращаем результат JSON-строкой — её увидит модель.
         // ─────────────────────────────────────────────────────────────────────────
-        private static string ExecuteFunction(FunctionCall call)
+        private static string ExecuteFunction(FunctionCall call, string accessToken)
         {
             switch (call.Name)
             {
@@ -191,73 +191,127 @@ namespace GigaChatIntegration
                 // ── ТОЧКА СОЕДИНЕНИЯ ДВУХ ТЕХНИК ──────────────────────────────────
                 //  Function Calling решил ЗАПУСТИТЬ тест (quiz_me), а форму вопроса
                 //  гарантирует СТРУКТУРИРОВАННЫЙ ВЫВОД: внутри зовём GenerateQuiz.
-                //case "quiz_me":
-                //    {
-                //        string topic = GetStr(call.Arguments, "topic") ?? "C#";
-                //        Console.WriteLine($"\n  [запускаю тест по теме: {topic}]");
+                case "quiz_me":
+                    {
+                        string topic = GetStr(call.Arguments, "topic") ?? "C#";
+                        Console.WriteLine($"\n  [запускаю тест по теме: {topic}]");
 
-                //        // (1) Структурированный вывод как ДВИЖОК инструмента: отдельный запрос
-                //        //     к модели за строгим JSON по схеме QuizQuestion (+ StripJsonFences).
-                //        //     Модель иногда присылает кривой JSON (хвостовая запятая, лишний текст) —
-                //        //     оборачиваем в try/catch, чтобы один тест не уронил весь чат.
-                //        QuizQuestion quiz;
-                //        try
-                //        {
-                //            quiz = GenerateQuiz(topic);
-                //        }
-                //        catch (Exception ex)
-                //        {
-                //            Console.WriteLine($"  [не удалось собрать тест: {ex.Message}]\n");
-                //            return JsonSerializer.Serialize(
-                //                new { topic, error = "Не удалось сгенерировать корректный тест. Предложи попробовать ещё раз." }, JsonOpts);
-                //        }
+                        // (1) Структурированный вывод как ДВИЖОК инструмента: отдельный запрос
+                        //     к модели за строгим JSON по схеме QuizQuestion (+ StripJsonFences).
+                        //     Модель иногда присылает кривой JSON (хвостовая запятая, лишний текст) —
+                        //     оборачиваем в try/catch, чтобы один тест не уронил весь чат.
+                        QuizQuestion quiz;
+                        try
+                        {
+                            quiz = GenerateQuiz(topic, accessToken);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"  [не удалось собрать тест: {ex.Message}]\n");
+                            return JsonSerializer.Serialize(
+                                new { topic, error = "Не удалось сгенерировать корректный тест. Предложи попробовать ещё раз." }, JsonOpts);
+                        }
 
-                //        // Подстраховка от кривого ответа: нет вариантов / индекс вне диапазона.
-                //        if (quiz.Options is not { Length: > 0 })
-                //        {
-                //            Console.WriteLine("  [тест пришёл без вариантов ответа]\n");
-                //            return JsonSerializer.Serialize(
-                //                new { topic, error = "Тест без вариантов. Предложи попробовать ещё раз." }, JsonOpts);
-                //        }
-                //        int correctIndex = quiz.CorrectIndex >= 0 && quiz.CorrectIndex < quiz.Options.Length
-                //            ? quiz.CorrectIndex : 0;
+                        // Подстраховка от кривого ответа: нет вариантов / индекс вне диапазона.
+                        if (quiz.Options is not { Length: > 0 })
+                        {
+                            Console.WriteLine("  [тест пришёл без вариантов ответа]\n");
+                            return JsonSerializer.Serialize(
+                                new { topic, error = "Тест без вариантов. Предложи попробовать ещё раз." }, JsonOpts);
+                        }
+                        int correctIndex = quiz.CorrectIndex >= 0 && quiz.CorrectIndex < quiz.Options.Length
+                            ? quiz.CorrectIndex : 0;
 
-                //        // Источник вопроса — живая генерация (структурированный вывод по схеме).
-                //        Console.WriteLine("  [вопрос сгенерирован вживую — структурированный вывод по схеме]");
+                        // Источник вопроса — живая генерация (структурированный вывод по схеме).
+                        Console.WriteLine("  [вопрос сгенерирован вживую — структурированный вывод по схеме]");
 
-                //        // (2) Показываем тест ученику.
-                //        Console.WriteLine($"❓ {quiz.Question}");
-                //        for (int i = 0; i < quiz.Options.Length; i++)
-                //            Console.WriteLine($"    {i + 1}. {quiz.Options[i]}");
+                        // (2) Показываем тест ученику.
+                        Console.WriteLine($"❓ {quiz.Question}");
+                        for (int i = 0; i < quiz.Options.Length; i++)
+                            Console.WriteLine($"    {i + 1}. {quiz.Options[i]}");
 
-                //        // (3) Читаем ответ ученика (блокирующий ReadLine прямо в обработчике —
-                //        //     учебное упрощение: формально мы всё ещё «выполняем функцию»).
-                //        Console.Write("Твой ответ (1-4): ");
-                //        bool parsed = int.TryParse(Console.ReadLine(), out int num);
-                //        bool correct = parsed && num - 1 == correctIndex;
+                        // (3) Читаем ответ ученика (блокирующий ReadLine прямо в обработчике —
+                        //     учебное упрощение: формально мы всё ещё «выполняем функцию»).
+                        Console.Write("Твой ответ (1-4): ");
+                        bool parsed = int.TryParse(Console.ReadLine(), out int num);
+                        bool correct = parsed && num - 1 == correctIndex;
 
-                //        // (4) Мгновенный фидбэк ученику.
-                //        Console.WriteLine(correct ? "✅ Верно!" : "❌ Неверно.");
-                //        Console.WriteLine($"   Разбор: {quiz.Explanation}\n");
+                        // (4) Мгновенный фидбэк ученику.
+                        Console.WriteLine(correct ? "✅ Верно!" : "❌ Неверно.");
+                        Console.WriteLine($"   Разбор: {quiz.Explanation}\n");
 
-                //        // (5) Возвращаем модели структурный вердикт — она прокомментирует
-                //        //     и сможет предложить mark_studied / add_topic.
-                //        return JsonSerializer.Serialize(new
-                //        {
-                //            topic,
-                //            question = quiz.Question,
-                //            userAnswer = parsed ? num : (int?)null,
-                //            correct,
-                //            correctOption = quiz.Options[correctIndex],
-                //            explanation = quiz.Explanation,
-                //        }, JsonOpts);
-                //    }
+                        // (5) Возвращаем модели структурный вердикт — она прокомментирует
+                        //     и сможет предложить mark_studied / add_topic.
+                        return JsonSerializer.Serialize(new
+                        {
+                            topic,
+                            question = quiz.Question,
+                            userAnswer = parsed ? num : (int?)null,
+                            correct,
+                            correctOption = quiz.Options[correctIndex],
+                            explanation = quiz.Explanation,
+                        }, JsonOpts);
+                    }
 
                 default:
                     // Модель попросила функцию, которой у нас нет — честно говорим об этом.
                     return JsonSerializer.Serialize(new { error = $"Неизвестная функция: {call.Name}" }, JsonOpts);
             }
         }
+
+        // ─────────────────────────────────────────────────────────────────────────
+        //  СТРУКТУРИРОВАННЫЙ ВЫВОД: просим модель вернуть строгий JSON (тест-вопрос)
+        //  и разбираем его в объект C#. Это ДВИЖОК инструмента quiz_me.
+        //  Живая генерация — единственный источник вопроса. Структурированный вывод
+        //  гарантирует ФОРМУ (4 варианта + индекс верного), но НЕ правильность фактов:
+        //  по слабым для модели темам вопрос может выйти с шероховатостями — для демо ок.
+        // ─────────────────────────────────────────────────────────────────────────
+        private static QuizQuestion GenerateQuiz(string topic, string accessToken)
+        {
+
+            // Системный промпт генератора теста: держим модель в её зоне — факты языка C#
+            // (ключевые слова, типы, синтаксис, операторы, коллекции, строки, ООП) — и
+            // задаём строгую JSON-схему ответа. Это и есть «управление моделью» из Дня 2.
+            const string GeneratorSystemPrompt =
+                "Ты — генератор тест-вопросов про язык C# для начинающих. " +
+                "Спрашивай про факты самого языка и базовой библиотеки .NET: ключевые слова (var, const, readonly, static, ref, out), " +
+                "типы и их различия (struct и class, значимые и ссылочные, nullable), синтаксис, поведение операторов, " +
+                "базовые коллекции (List<T>, Dictionary<TKey,TValue>), строки, исключения, ООП в C#. " +
+                "Сначала ВЫБЕРИ один факт, в котором уверен, сделай его верным ответом, затем придумай 3 правдоподобных, но неверных. " +
+                "Вопрос должен быть КОНКРЕТНЫМ (про конкретное ключевое слово, тип или метод), а не общим рассуждением. " +
+                "Верни ТОЛЬКО JSON-объект по схеме:\n" +
+                "{ \"question\": строка, \"options\": [ровно 4 строки], \"correctIndex\": число 0..3, \"explanation\": строка }\n" +
+                "correctIndex — позиция верного варианта в options, нумерация с НУЛЯ. explanation объясняет именно options[correctIndex]. " +
+                "Ровно один верный вариант, остальные три неверны. Без markdown, без текста до или после JSON.";
+
+
+
+            var messages = new List<ChatMessage>
+            {
+                new("system", GeneratorSystemPrompt),
+                // FEW-SHOT: один образец задаёт И форму JSON, И стиль (конкретный факт языка).
+                //new("user", "Тема для теста (про язык C#): ключевое слово var"),
+                //new("assistant",
+                //    "{\"question\":\"Что делает ключевое слово var при объявлении локальной переменной в C#?\"," +
+                //    "\"options\":[\"Тип выводится компилятором из выражения справа\"," +
+                //    "\"Создаёт переменную без типа, как в JavaScript\"," +
+                //    "\"Объявляет переменную, которую нельзя переприсвоить\"," +
+                //    "\"Делает переменную видимой во всех методах класса\"]," +
+                //    "\"correctIndex\":0,\"explanation\":\"var — это неявная типизация: компилятор сам выводит конкретный тип из инициализатора, переменная остаётся строго типизированной.\"}"),
+                new("user", $"Тема для теста (про язык C#): {topic}"),
+            };
+
+            // Низкая температура: строгому вопросу нужна предсказуемость, а не фантазия.
+            // Иногда модель оборачивает JSON в ```json ... ``` — срежем «забор».
+            //string clean = StripJsonFences(AskRaw(messages, temperature: 0.2));
+            string clean = AskRaw(messages, accessToken, temperature: 0.2);
+
+            // Кривой JSON бросит из Deserialize, пустой ("null") — поймаем через ??.
+            // Любую ошибку перехватит обработчик quiz_me и попросит модель повторить.
+            return JsonSerializer.Deserialize<QuizQuestion>(clean, JsonOpts)
+                   ?? throw new InvalidOperationException("Модель вернула пустой JSON вместо тест-вопроса.");
+        }
+
 
         private static string? GetStr(JsonElement obj, string field)
         {
@@ -399,4 +453,9 @@ namespace GigaChatIntegration
     // Тема в плане изучения. Studied ставит функция mark_studied; изученные темы —
     // задел для Дня 3 (поиск по смыслу «повтори пройденное»).
     record StudyTopic(string Title, string Priority, string? Note, bool Studied = false);
+
+    // Тест-вопрос, который достаём структурированным выводом в GenerateQuiz
+    // (движок инструмента quiz_me).
+    record QuizQuestion(string Question, string[] Options, int CorrectIndex, string Explanation);
+
 }
