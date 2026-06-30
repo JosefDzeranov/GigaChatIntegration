@@ -9,131 +9,285 @@ namespace GigaChatIntegration
     {
         static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
         private static readonly List<StudyTopic> plan = new();
+
+        // ── БАЗА ЗНАНИЙ ──────────────────────────────────────────────────────────
+        //  Наши «документы» — короткие заметки по C#. На Дне 4 заменим их на реальные
+        //  файлы (и научимся резать длинные документы на куски-«чанки»). Сегодня держим
+        //  прямо в коде, чтобы сфокусироваться на сути — поиске по смыслу.
+        private static readonly KnowledgeDoc[] Knowledge =
+        {
+            new("Значимые и ссылочные типы",
+                "struct — значимый (value) тип: при присваивании копируется целиком, у каждой переменной свой экземпляр. class — ссылочный: копируется только ссылка на один объект в куче. Поэтому правка копии struct не трогает оригинал, а копии class — трогает."),
+            new("Списки и массивы",
+                "List<T> — динамическая коллекция: хранит элементы по порядку, умеет Add, Remove, индексатор [i], Count, растёт сама. Массив T[] — фиксированной длины. Когда число элементов заранее неизвестно — берут List<T>."),
+            new("Словарь Dictionary",
+                "Dictionary<TKey,TValue> хранит пары «ключ → значение» и ищет по ключу почти мгновенно (хеш-таблица). ContainsKey проверяет наличие ключа, TryGetValue безопасно достаёт значение без исключения, если ключа нет."),
+            new("Обработка ошибок",
+                "Чтобы программа не падала при сбое, опасный код оборачивают в try/catch: в try — действие, которое может бросить исключение, в catch — что делать при ошибке. Блок finally выполняется всегда. Своё исключение бросают через throw new Exception(\"текст\")."),
+            new("Асинхронность async/await",
+                "async/await не блокирует поток, пока программа чего-то ждёт (ответ из сети, чтение файла). Метод помечают async, «ожидающие» вызовы — await. Такие методы возвращают Task или Task<T>. Это про отзывчивость во время ожидания, а не про скорость вычислений."),
+            new("LINQ — запросы к коллекциям",
+                "LINQ фильтрует и преобразует коллекции цепочкой методов: Where — отбор по условию, Select — преобразование каждого элемента, OrderBy — сортировка, First/Any/Count — выборка и подсчёт. Работает над любым IEnumerable<T>."),
+            new("Проверка на null",
+                "Оператор ?? (null-coalescing) возвращает левый операнд, если он не null, иначе правый: name ?? \"гость\". Оператор ?. безопасно обращается к члену: user?.Name вернёт null, если user равен null, вместо падения программы."),
+            new("Интерфейсы и полиморфизм",
+                "Интерфейс — это контракт: список методов и свойств без реализации. Класс, реализующий интерфейс, обязан их предоставить. Благодаря этому код работает с интерфейсом, не зная конкретный класс, — это и есть полиморфизм."),
+            new("Строки и интерполяция",
+                "Строки в C# неизменяемы. Удобная склейка — интерполяция: $\"Привет, {name}!\". Полезное: string.IsNullOrWhiteSpace, Trim, Split, Contains, ToLower. Когда собираешь строку из многих кусков в цикле — бери StringBuilder."),
+            new("Целочисленное деление",
+                "Деление двух int даёт int — дробная часть отбрасывается: 7 / 2 == 3. Чтобы получить 3.5, хотя бы один операнд должен быть double: 7 / 2.0. Остаток от деления даёт оператор %: 7 % 2 == 1."),
+        };
+
         static void Main(string[] args)
         {
-            var authKey = "MDE5ZWYwMjQtZjhkNi03ZmI5LTlkNDktYWQ4MmJiODQ5OTRhOmQ0YTYzOTg5LTIwZmQtNGJmNy05YTcyLTQ3NjllMzQwMjVhMQ==";
+            var authKey = "MDE5ZWYwMjQtZjhkNi03ZmI5LTlkNDktYWQ4MmJiODQ5OTRhOjllMGQ2MWJiLTVmODktNDE1ZC04Y2JhLTRmNDQzM2Q5OGFkNw==";
 
             var accessToken = GetAccessToken(authKey);
 
-            Console.WriteLine("Готово!\n");
-            Console.WriteLine("=== ИИ-наставник по C#: ведёт план изучения и сам проверяет тестами ===");
-            Console.WriteLine("Примеры:");
-            Console.WriteLine("  • «хочу разобраться с делегатами, это важно»  (добавит в план)");
-            Console.WriteLine("  • «что у меня в плане?»                        (покажет план)");
-            Console.WriteLine("  • «проверь меня по разнице struct и class»     (устроит мини-тест)");
-            Console.WriteLine("  • «я разобрался с делегатами»                  (отметит изученным)");
+            // (1) ИНДЕКСАЦИЯ. Один раз прогоняем все заметки через эмбеддинги и запоминаем
+            //     пары {заметка, вектор}. Это наше «хранилище» для поиска. Делаем ОДНИМ
+            //     батч-запросом — список текстов разом (один поход в сеть на всю базу).
+            Console.WriteLine($"Индексирую базу знаний ({Knowledge.Length} заметок)...");
+            float[][] vectors = Embed(Knowledge.Select(d => $"{d.Title}. {d.Text}").ToList(), accessToken);
+
+            var knowledgeIndexes = new List<Indexed>();
+            for (int i = 0; i < Knowledge.Length; i++)
+                knowledgeIndexes.Add(new Indexed(Knowledge[i], vectors[i]));
+            Console.WriteLine($"Готово: {knowledgeIndexes.Count} заметок, размерность вектора смысла — {vectors[0].Length}.\n");
+
+            Console.WriteLine("=== Поиск по смыслу в базе знаний по C# ===");
+            Console.WriteLine("Спроси своими словами — найду по смыслу, не по совпадению слов. Например:");
+            Console.WriteLine("  • «чем массив отличается от словаря?»");
+            Console.WriteLine("  • «как не уронить программу при ошибке?»");
+            Console.WriteLine("  • «что подставить, если значения нет?»");
             Console.WriteLine("'выход' — закончить.\n");
-
-            // Системный промпт — «характер и правила» наставника (День 2: системные промпты).
-            var history = new List<ChatMessage>
-            {
-                new("system",
-                    "Ты — помощник-наставник по обучению C# для начинающего разработчика. " +
-                    "Ты ведёшь его личный план изучения тем и помогаешь проверять знания. " +
-                    "У тебя есть инструменты (функции), которыми ты управляешь сам:\n" +
-                    "• add_topic — когда ученик хочет что-то изучить, просит добавить тему, " +
-                    "или ты сам по ходу разговора считаешь тему важной.\n" +
-                    "• list_topics — когда ученик спрашивает, что у него в плане, что осталось или с чего начать.\n" +
-                    "• mark_studied — когда ученик говорит, что разобрался с темой, прошёл её или выучил.\n" +
-                    "• quiz_me — когда ученик просит проверить знания («проверь меня», «дай тест», " +
-                    "«я готов по теме X») ИЛИ когда он уверяет, что разобрался, и это стоит подтвердить мини-тестом.\n" +
-                    "Правила:\n" +
-                    "- Вызывай функцию ТОЛЬКО когда она действительно нужна. За один ответ — не больше одного вызова функции.\n" +
-                    "- Не придумывай сам текст тест-вопроса и варианты — их ВСЕГДА формирует функция quiz_me. " +
-                    "Ты лишь объявляешь о начале проверки и комментируешь её результат.\n" +
-                    "- Когда пришёл результат quiz_me: если ответ верный — кратко похвали и предложи отметить тему " +
-                    "изученной (mark_studied) или добавить смежную; если неверный — мягко разбери ошибку одним " +
-                    "предложением и предложи оставить тему на повтор.\n" +
-                    "- Никогда не выдумывай результат функции — дождись, что вернёт программа.\n" +
-                    "- Если функции не нужны — просто ответь словами. Отвечай кратко, доброжелательно и на русском."),
-            };
-
-
-            // Функции, которые мы РАЗРЕШАЕМ модели вызывать (имя + описание + схема аргументов).
-            var functions = new List<FunctionDef>
-            {
-                new("add_topic",
-                    "Добавляет тему в личный план изучения C#.",
-                    new
-                    {
-                        type = "object",
-                        properties = new
-                        {
-                            title    = new { type = "string", description = "Тема для изучения, напр. «делегаты»" },
-                            priority = new { type = "string", @enum = new[] { "высокий", "средний", "низкий" },
-                                             description = "Насколько важно изучить тему" },
-                            note     = new { type = "string", description = "Заметка/зачем изучать (свободная форма). Может отсутствовать." },
-                        },
-                        required = new[] { "title" },
-                    }),
-
-                new("list_topics",
-                    "Возвращает текущий план изучения ученика (что в плане и что уже изучено).",
-                    new { type = "object", properties = new { } }),
-
-                new("mark_studied",
-                    "Помечает тему в плане как изученную (когда ученик говорит, что разобрался с ней).",
-                    new
-                    {
-                        type = "object",
-                        properties = new
-                        {
-                            title = new { type = "string", description = "Какую тему из плана отметить изученной" },
-                        },
-                        required = new[] { "title" },
-                    }),
-
-                new("quiz_me",
-                    "Проводит мини-тест (1 вопрос с 4 вариантами) по заданной теме C# и проверяет ответ ученика.",
-                    new
-                    {
-                        type = "object",
-                        properties = new
-                        {
-                            topic = new { type = "string", description = "Тема теста, напр. «разница между struct и class»" },
-                        },
-                        required = new[] { "topic" },
-                    }),
-            };
 
             while (true)
             {
-                Console.Write("Твое сообщение:");
-                var userInput = Console.ReadLine();
+                Console.Write("Вопрос: ");
+                string? question = Console.ReadLine();
 
-                if (userInput == "выход")
-                    break;
+                if (question == "выход") break;
 
-                history.Add(new ChatMessage("user", userInput));
+                // (2) ПОИСК. Вектор вопроса → косинус ко всем заметкам → топ-3 по смыслу.
+                List<Scored> top = Search(question, knowledgeIndexes, topK: 3, accessToken);
 
-                var reply = AskGigaChat(history, accessToken, functions);
+                Console.WriteLine("\n  Нашёл по смыслу (близость 0..1):");
+                foreach (var s in top)
+                    Console.WriteLine($"    [{s.Score:0.00}] {s.Doc.Title}");
 
-                string answer;
-                if (reply.FunctionCall is not null)
-                {
-                    // Модель решила вызвать функцию. Сохраняем её «ход» (вместе с
-                    // functions_state_id — GigaChat ждёт его обратно) и выполняем функцию.
-                    history.Add(reply with { Content = reply.Content ?? "" });
-
-                    string result = ExecuteFunction(reply.FunctionCall, accessToken);
-
-                    history.Add(new ChatMessage("function", result, Name: reply.FunctionCall.Name));
-
-                    // Финальный ответ просим УЖЕ БЕЗ функций: модель обязана ответить текстом
-                    // и не зациклится на повторных вызовах одной и той же функции (Function
-                    // Calling у GigaChat в бете это любит — звал бы list_topics по кругу).
-                    answer = AskRaw(history, accessToken);
-                }
-                else
-                {
-                    // Функция не нужна — это обычный текстовый ответ.
-                    answer = reply.Content ?? "";
-                }
-
-
-                history.Add(new ChatMessage("assistant", answer));
-                Console.WriteLine($"GigaChat: {answer}");
+                // (3) ФИНАЛ-МОСТИК (RAG): отдаём найденные заметки в GigaChat как контекст —
+                //     он отвечает СТРОГО по ним. Целиком соберём на Дне 4.
+                string answer = AskWithContext(question, top, accessToken);
+                Console.WriteLine($"\nНаставник: {answer}\n");
             }
+
+
+            //Console.WriteLine("Готово!\n");
+            //Console.WriteLine("=== ИИ-наставник по C#: ведёт план изучения и сам проверяет тестами ===");
+            //Console.WriteLine("Примеры:");
+            //Console.WriteLine("  • «хочу разобраться с делегатами, это важно»  (добавит в план)");
+            //Console.WriteLine("  • «что у меня в плане?»                        (покажет план)");
+            //Console.WriteLine("  • «проверь меня по разнице struct и class»     (устроит мини-тест)");
+            //Console.WriteLine("  • «я разобрался с делегатами»                  (отметит изученным)");
+            //Console.WriteLine("'выход' — закончить.\n");
+
+            //// Системный промпт — «характер и правила» наставника (День 2: системные промпты).
+            //var history = new List<ChatMessage>
+            //{
+            //    new("system",
+            //        "Ты — помощник-наставник по обучению C# для начинающего разработчика. " +
+            //        "Ты ведёшь его личный план изучения тем и помогаешь проверять знания. " +
+            //        "У тебя есть инструменты (функции), которыми ты управляешь сам:\n" +
+            //        "• add_topic — когда ученик хочет что-то изучить, просит добавить тему, " +
+            //        "или ты сам по ходу разговора считаешь тему важной.\n" +
+            //        "• list_topics — когда ученик спрашивает, что у него в плане, что осталось или с чего начать.\n" +
+            //        "• mark_studied — когда ученик говорит, что разобрался с темой, прошёл её или выучил.\n" +
+            //        "• quiz_me — когда ученик просит проверить знания («проверь меня», «дай тест», " +
+            //        "«я готов по теме X») ИЛИ когда он уверяет, что разобрался, и это стоит подтвердить мини-тестом.\n" +
+            //        "Правила:\n" +
+            //        "- Вызывай функцию ТОЛЬКО когда она действительно нужна. За один ответ — не больше одного вызова функции.\n" +
+            //        "- Не придумывай сам текст тест-вопроса и варианты — их ВСЕГДА формирует функция quiz_me. " +
+            //        "Ты лишь объявляешь о начале проверки и комментируешь её результат.\n" +
+            //        "- Когда пришёл результат quiz_me: если ответ верный — кратко похвали и предложи отметить тему " +
+            //        "изученной (mark_studied) или добавить смежную; если неверный — мягко разбери ошибку одним " +
+            //        "предложением и предложи оставить тему на повтор.\n" +
+            //        "- Никогда не выдумывай результат функции — дождись, что вернёт программа.\n" +
+            //        "- Если функции не нужны — просто ответь словами. Отвечай кратко, доброжелательно и на русском."),
+            //};
+
+
+            //// Функции, которые мы РАЗРЕШАЕМ модели вызывать (имя + описание + схема аргументов).
+            //var functions = new List<FunctionDef>
+            //{
+            //    new("add_topic",
+            //        "Добавляет тему в личный план изучения C#.",
+            //        new
+            //        {
+            //            type = "object",
+            //            properties = new
+            //            {
+            //                title    = new { type = "string", description = "Тема для изучения, напр. «делегаты»" },
+            //                priority = new { type = "string", @enum = new[] { "высокий", "средний", "низкий" },
+            //                                 description = "Насколько важно изучить тему" },
+            //                note     = new { type = "string", description = "Заметка/зачем изучать (свободная форма). Может отсутствовать." },
+            //            },
+            //            required = new[] { "title" },
+            //        }),
+
+            //    new("list_topics",
+            //        "Возвращает текущий план изучения ученика (что в плане и что уже изучено).",
+            //        new { type = "object", properties = new { } }),
+
+            //    new("mark_studied",
+            //        "Помечает тему в плане как изученную (когда ученик говорит, что разобрался с ней).",
+            //        new
+            //        {
+            //            type = "object",
+            //            properties = new
+            //            {
+            //                title = new { type = "string", description = "Какую тему из плана отметить изученной" },
+            //            },
+            //            required = new[] { "title" },
+            //        }),
+
+            //    new("quiz_me",
+            //        "Проводит мини-тест (1 вопрос с 4 вариантами) по заданной теме C# и проверяет ответ ученика.",
+            //        new
+            //        {
+            //            type = "object",
+            //            properties = new
+            //            {
+            //                topic = new { type = "string", description = "Тема теста, напр. «разница между struct и class»" },
+            //            },
+            //            required = new[] { "topic" },
+            //        }),
+            //};
+
+            //while (true)
+            //{
+            //    Console.Write("Твое сообщение:");
+            //    var userInput = Console.ReadLine();
+
+            //    if (userInput == "выход")
+            //        break;
+
+            //    history.Add(new ChatMessage("user", userInput));
+
+            //    var reply = AskGigaChat(history, accessToken, functions);
+
+            //    string answer;
+            //    if (reply.FunctionCall is not null)
+            //    {
+            //        // Модель решила вызвать функцию. Сохраняем её «ход» (вместе с
+            //        // functions_state_id — GigaChat ждёт его обратно) и выполняем функцию.
+            //        history.Add(reply with { Content = reply.Content ?? "" });
+
+            //        string result = ExecuteFunction(reply.FunctionCall, accessToken);
+
+            //        history.Add(new ChatMessage("function", result, Name: reply.FunctionCall.Name));
+
+            //        // Финальный ответ просим УЖЕ БЕЗ функций: модель обязана ответить текстом
+            //        // и не зациклится на повторных вызовах одной и той же функции (Function
+            //        // Calling у GigaChat в бете это любит — звал бы list_topics по кругу).
+            //        answer = AskRaw(history, accessToken);
+            //    }
+            //    else
+            //    {
+            //        // Функция не нужна — это обычный текстовый ответ.
+            //        answer = reply.Content ?? "";
+            //    }
+
+
+            //    history.Add(new ChatMessage("assistant", answer));
+            //    Console.WriteLine($"GigaChat: {answer}");
+            //}
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────
+        //  ФИНАЛ-МОСТИК В ДЕНЬ 4 (RAG): ответ СТРОГО по найденным заметкам.
+        //  Складываем найденное в контекст и системным промптом велим модели не
+        //  выдумывать. Так «поиск по смыслу» превращается в ответ ПО ДОКУМЕНТАМ.
+        // ─────────────────────────────────────────────────────────────────────────
+        private static string AskWithContext(string question, List<Scored> context, string accessToken)
+        {
+            var sb = new StringBuilder();
+            foreach (var s in context)
+                sb.AppendLine($"### {s.Doc.Title}\n{s.Doc.Text}\n");
+
+            var messages = new List<ChatMessage>
+            {
+                new("system",
+                    "Ты — помощник по C#. Отвечай на вопрос ТОЛЬКО на основе заметок ниже. " +
+                    "Если ответа в них нет — честно скажи, что в базе знаний этого нет, и НЕ выдумывай. " +
+                    "Отвечай кратко и по-русски; в конце укажи, на какую заметку опираешься."),
+                new("user", $"ЗАМЕТКИ:\n{sb}\nВОПРОС: {question}"),
+            };
+
+            return AskRaw(messages, accessToken);
+        }
+
+        // ПОИСК ПО СМЫСЛУ: эмбеддим вопрос, считаем косинус к каждой заметке,
+        // сортируем по убыванию близости и берём top-K самых похожих.
+        private static List<Scored> Search(string query, List<Indexed> index, int topK, string accessToken)
+        {
+            float[] queryVector = Embed(new List<string> { query }, accessToken)[0];
+
+            return index
+                .Select(item => new Scored(item.Doc, Cosine(queryVector, item.Vector)))
+                .OrderByDescending(s => s.Score)
+                .Take(topK)
+                .ToList();
+        }
+
+        // КОСИНУСНАЯ БЛИЗОСТЬ двух векторов: ~1 — смысл совпадает, ~0 — не связаны.
+        // Это косинус угла между векторами = (a·b) / (|a|·|b|). Длину векторов формула
+        // учитывает сама, поэтому заранее нормировать не нужно.
+        private static double Cosine(float[] a, float[] b)
+        {
+            double dot = 0, na = 0, nb = 0;
+            for (int i = 0; i < a.Length; i++)
+            {
+                dot += a[i] * b[i];   // скалярное произведение
+                na += a[i] * a[i];   // квадрат длины a
+                nb += b[i] * b[i];   // квадрат длины b
+            }
+            // + 1e-9 — крошечная добавка, чтобы случайно не делить на ноль.
+            return dot / (Math.Sqrt(na) * Math.Sqrt(nb) + 1e-9);
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────
+        //  ЭМБЕДДИНГИ: превращаем тексты в векторы чисел (координаты смысла).
+        //  Один запрос принимает СПИСОК строк (input) и возвращает по вектору на каждую.
+        // ─────────────────────────────────────────────────────────────────────────
+        private static float[][] Embed(List<string> texts, string accessToken)
+        {
+            var body = new EmbeddingRequest("Embeddings", texts);
+            string json = JsonSerializer.Serialize(body, JsonOpts);
+
+            const string EmbeddingsUrl = "https://gigachat.devices.sberbank.ru/api/v1/embeddings";
+            using var request = new HttpRequestMessage(HttpMethod.Post, EmbeddingsUrl)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            };
+
+            HttpClient httpClient = new(new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            });
+            httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+            using var response = httpClient.Send(request);
+            response.EnsureSuccessStatusCode();
+
+            var result = JsonSerializer.Deserialize<EmbeddingResponse>(ReadBody(response), JsonOpts)!;
+
+            // У каждого вектора index = позиция текста во входном списке. Сортируем по index,
+            // чтобы порядок векторов ТОЧНО совпал с порядком входных текстов.
+            return result.Data
+                .OrderBy(d => d.Index)
+                .Select(d => d.Embedding)
+                .ToArray();
         }
 
         // Простой запрос БЕЗ функций — возвращает текст. Используется и в GenerateQuiz
@@ -458,4 +612,20 @@ namespace GigaChatIntegration
     // (движок инструмента quiz_me).
     record QuizQuestion(string Question, string[] Options, int CorrectIndex, string Explanation);
 
+
+
+    // ── Эмбеддинги ───────────────────────────────────────────────────────────────
+    // Запрос: имя модели эмбеддингов + список текстов (input принимает массив строк).
+    record EmbeddingRequest(string Model, List<string> Input);
+    // Ответ: список векторов; у каждого Embedding — числа, Index — позиция текста во входе.
+    record EmbeddingResponse(List<EmbeddingData> Data);
+    record EmbeddingData(float[] Embedding, int Index);
+
+    // Заметка базы знаний («документ»). На Дне 4 источник заменим на реальные файлы.
+    record KnowledgeDoc(string Title, string Text);
+
+    // Проиндексированная заметка: сам документ + его вектор смысла.
+    record Indexed(KnowledgeDoc Doc, float[] Vector);
+
+    record Scored(KnowledgeDoc Doc, double Score);
 }
